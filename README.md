@@ -5,11 +5,11 @@
 
 #### Инструкция по настройке
 
-[Инструкция по настройке](https://yookassa.ru/docs/support/payments/onboarding/integration/cms-module/opencart2)
+
 
 ### Требования к CMS
-* версия 3.0.х;
-* PHP 5.4 или выше;
+* версия 4.0.х;
+* PHP 8.0 или выше;
 * cURL.
 
 #### ЮKassa

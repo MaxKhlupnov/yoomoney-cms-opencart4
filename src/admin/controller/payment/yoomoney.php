@@ -1,4 +1,5 @@
 <?php
+namespace Opencart\Admin\Controller\Extension\Yoomoney\Payment;
 
 use YooKassa\Model\CurrencyCode;
 use YooKassa\Model\PaymentData\B2b\Sberbank\VatDataType;
@@ -9,10 +10,10 @@ use YooKassa\Model\PaymentStatus;
  *
  * @property ModelSettingSetting $model_setting_setting
  */
-class ControllerExtensionPaymentYoomoney extends Controller
+class ControllerExtensionPaymentYoomoney extends \Opencart\System\Engine\Controller
 {
     const MODULE_NAME = 'yoomoney';
-    const MODULE_VERSION = '2.2.5';
+    const MODULE_VERSION = '2.3.8';
 
     const WIDGET_INSTALL_STATUS_SUCCESS = true;
     const WIDGET_INSTALL_STATUS_FAIL    = false;
@@ -31,11 +32,16 @@ class ControllerExtensionPaymentYoomoney extends Controller
 
     public function index()
     {
-        $this->load->language('extension/payment/'.self::MODULE_NAME);
+        $this->load->language('extension/yoomoney/payment/'.self::MODULE_NAME);
         $this->document->setTitle($this->language->get('heading_title'));
         $this->load->model('setting/setting');
         $this->load->model('catalog/option');
         $this->load->model('localisation/currency');
+
+ #       $this->load->language('extension/squareup/payment/squareup');
+ #       $this->load->model('extension/squareup/payment/squareup');
+ #       $this->load->model('setting/setting');
+
 
         if ($this->getModel()->getKassaModel()->isEnabled()) {
             $tab = 'tab-kassa';
@@ -67,13 +73,11 @@ class ControllerExtensionPaymentYoomoney extends Controller
             $this->model_setting_setting->editSetting(self::MODULE_NAME, $this->request->post);
             $this->model_setting_setting->editSetting('payment_'.self::MODULE_NAME, $this->request->post);
 
-            $settings = $this->model_setting_setting->getSetting(self::MODULE_NAME);
-
             $this->session->data['success']         = $this->language->get('kassa_text_success');
             $this->session->data['last-active-tab'] = $data['lastActiveTab'];
 
             if (isset($this->request->post['language_reload'])) {
-                $this->session->data['success-message'] = 'Настройки были сохранены';
+                $this->session->data['success-message'] = $this->language->get('kassa_settings_text_success');
                 $this->response->redirect(
                     $this->url->link('extension/payment/'.self::MODULE_NAME,
                         'user_token='.$this->session->data['user_token'], true)
@@ -123,6 +127,18 @@ class ControllerExtensionPaymentYoomoney extends Controller
             'user_token='.$this->session->data['user_token'],
             true
         );
+
+        $data['oauth_connect_url'] = htmlspecialchars_decode($this->url->link(
+            'extension/payment/'.self::MODULE_NAME.'/oauthConnect',
+            'user_token='.$this->session->data['user_token'],
+            true
+        ));
+
+        $data['oauth_token_url'] = htmlspecialchars_decode($this->url->link(
+            'extension/payment/'.self::MODULE_NAME.'/oauthToken',
+            'user_token='.$this->session->data['user_token'],
+            true
+        ));
 
         $data['language'] = $this->language;
 
@@ -236,7 +252,15 @@ class ControllerExtensionPaymentYoomoney extends Controller
             && $data['nps_block_text'];
 
         $data['load'] = $this->load;
+
+        if ($this->getModel()->getKassaModel()->isEnabled()){
+            $this->getModel()->getKassaModel()->fetchShopInfo();
+        }
+        $data['has_oauth_token'] = (bool)$this->getModel()->getKassaModel()->getOauthToken();
+        $data['isConnectionFailed'] = !$this->getModel()->getKassaModel()->checkConnection();
+        $data['auth_part'] = $this->load->view('extension/payment/yoomoney/parts/auth', $data);
         $data['data'] = $data;
+
         $this->response->setOutput($this->load->view('extension/payment/yoomoney', $data));
     }
 
@@ -479,24 +503,14 @@ class ControllerExtensionPaymentYoomoney extends Controller
         $kassa->setIsEnabled($enabled);
 
         $value = isset($request->post['yoomoney_kassa_shop_id']) ? trim($request->post['yoomoney_kassa_shop_id']) : '';
-        $kassa->setShopId($value);
-        $request->post['yoomoney_kassa_shop_id'] = $value;
-        if ($enabled && empty($value)) {
-            $this->error['kassa_shop_id'] = $this->language->get('kassa_shop_id_error_required');
+        if ($enabled && !empty($value)) {
+            $kassa->setShopId($value);
         }
+        $request->post['yoomoney_kassa_shop_id'] = $kassa->getShopId();
 
         $value = isset($request->post['yoomoney_kassa_password']) ? trim($request->post['yoomoney_kassa_password']) : '';
         $kassa->setPassword($value);
         $request->post['yoomoney_kassa_password'] = $value;
-        if ($enabled && empty($value)) {
-            $this->error['kassa_password'] = $this->language->get('kassa_password_error_required');
-        }
-
-        if (empty($this->error)) {
-            if (!$kassa->checkConnection()) {
-                $this->error['kassa_invalid_credentials'] = $this->language->get('kassa_error_invalid_credentials');
-            }
-        }
 
         $value = isset($request->post['yoomoney_kassa_payment_mode']) ? $request->post['yoomoney_kassa_payment_mode'] : '';
         $epl   = true;
@@ -609,7 +623,13 @@ class ControllerExtensionPaymentYoomoney extends Controller
             $kassa->setB2bTaxRates($value);
             $request->post['yoomoney_kassa_b2b_tax_rates'] = $kassa->getB2bTaxRates();
         }
+        $request->post['yoomoney_kassa_test_shop'] = $kassa->isTestShop();
+        $request->post['yoomoney_kassa_fiscalization_enabled'] = $kassa->isFiscalisationEnabled();
+        $request->post['yoomoney_kassa_token_expires_in'] = $kassa->getOauthTokenExpiresIn();
+
         $this->getModel()->log('debug', print_r($request->post, true));
+
+        $request->post['yoomoney_kassa_access_token'] = $kassa->getOauthToken();
     }
 
     private function validateWallet(Request $request)
@@ -775,36 +795,6 @@ class ControllerExtensionPaymentYoomoney extends Controller
         }
 
         return $data;
-    }
-
-    /**
-     * @param string $post
-     *
-     * @return string
-     */
-    public function goCurl($post)
-    {
-        $url = 'https://oauth.yandex.ru/token';
-        $ch  = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_FAILONERROR, 0);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 9);
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
-        $result = curl_exec($ch);
-        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        $data = json_decode($result);
-        if ($status !== 200 && empty($data->access_token)) {
-            $this->getModel()->log('error', 'Failed to get OAuth token:'.$data->error_description);
-            $this->response->redirect($this->url->link('extension/payment/yoomoney',
-                'err='.$data->error_description.'&user_token='.$this->session->data['user_token'], true));
-        }
-
-        return $data->access_token;
     }
 
     private function initErrors()
@@ -1236,6 +1226,44 @@ class ControllerExtensionPaymentYoomoney extends Controller
         echo json_encode($answer);
     }
 
+    /**
+     * Обрабатывает ajax запрос с фронта на получение URL для авторизации пользователя через OAuth,
+     * загружает модель из файла yoomoney_oauth.php, вызывает ф-ю getOauthConnectUrl() и инициирует ответ на фронт
+     *
+     * @return void
+     */
+    public function oauthConnect()
+    {
+        if (!$this->user->hasPermission('modify', 'extension/payment/yoomoney')) {
+            $this->sendResponseJson(json_encode(array('error' => 'Permission denied')), 403);
+        }
+
+        $this->load->model('extension/payment/yoomoney_oauth');
+        $model = $this->__get('model_extension_payment_yoomoney_oauth');
+        $response = $model->getOauthConnectUrl();
+        $code = isset($response['error']) ? 502 : 200;
+        $this->sendResponseJson(json_encode($response), $code);
+    }
+
+    /**
+     * Обрабатывает ajax запрос с фронта на получение и сохранение OAuth токена,
+     * загружает модель из файла yoomoney_oauth.php, вызывает ф-ю getOauthToken() и инициирует ответ на фронт
+     *
+     * @return void
+     */
+    public function oauthToken()
+    {
+        if (!$this->user->hasPermission('modify', 'extension/payment/yoomoney')) {
+            $this->sendResponseJson(json_encode(array('error' => 'Permission denied')), 403);
+        }
+
+        $this->load->model('extension/payment/yoomoney_oauth');
+        $model = $this->__get('model_extension_payment_yoomoney_oauth');
+        $response = $model->getOauthToken();
+        $code = isset($response['error']) ? 502 : 200;
+        $this->sendResponseJson(json_encode($response), $code);
+    }
+
     private function enableApplePayForWidget()
     {
         clearstatcache();
@@ -1281,7 +1309,7 @@ class ControllerExtensionPaymentYoomoney extends Controller
         return true;
     }
 
-    protected function sendResponseJson($json)
+    protected function sendResponseJson($json, $code = 200)
     {
         if (isset($this->request->server['HTTP_ORIGIN'])) {
             $this->response->addHeader('Access-Control-Allow-Origin: '.$this->request->server['HTTP_ORIGIN']);
@@ -1290,6 +1318,7 @@ class ControllerExtensionPaymentYoomoney extends Controller
             $this->response->addHeader('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
         }
         $this->response->addHeader('Content-Type: application/json');
+        $this->response->addHeader('HTTP/1.1 ' . $code);
         $this->response->setOutput(json_encode($json));
     }
 
