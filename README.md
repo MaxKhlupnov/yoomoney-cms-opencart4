@@ -1,4 +1,4 @@
-# yoomoney-cms-opencart3
+# yoomoney-cms-opencart4
 
 ### Что такое ЮMoney
 ЮMoney — это модуль для интеграции интернет-магазина с сервисами ЮKassa и ЮMoney.
